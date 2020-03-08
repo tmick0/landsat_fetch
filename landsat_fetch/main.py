@@ -33,8 +33,6 @@ def main():
     if args.band is None:
         args.band = [4, 3, 2]
 
-
-
     pool = multiprocessing.Pool(args.num_workers)
 
     with tempfilemanager(args.keepfiles, args.keepfiles is not None) as mgr:
