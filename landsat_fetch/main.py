@@ -27,6 +27,7 @@ def main():
     parser.add_argument("-n", "--num_workers", type=int, default=4, help="Number of worker threads to use")
     parser.add_argument('--calibrate', action='store_true', default=False, help="Enable conversion from DN to reflectance")
     parser.add_argument('--keepfiles', type=str, default=None, help="Location to store source and intermediate data instead of a temporary directory")
+    parser.add_argument('--pansharpen', action='store_true', default=False, help="Produce pansharpened output instead of simply merging bands")
 
     args = parser.parse_args()
 
@@ -50,16 +51,24 @@ def main():
         LOGGER.info("Filtering scene list on cloud cover...")
         sc = sc.filter(lambda df: df.cloudCover < args.max_clouds)
 
-        data = product_set.acquire(pool, mgr, sc, cells_needed, args.calibrate, args.band)
+        all_bands = args.band
+        if args.pansharpen and not 8 in all_bands:
+            all_bands = all_bands + [8]
+
+        data = product_set.acquire(pool, mgr, sc, cells_needed, args.calibrate, all_bands)
 
         if args.calibrate:
             data = calibrate(pool, mgr, data)
 
-        data = mosaic(pool, mgr, data, args.band, [args.lon0, args.lat1, args.lon1, args.lat0])
+        data = mosaic(pool, mgr, data, all_bands, [args.lon0, args.lat1, args.lon1, args.lat0])
         
-        LOGGER.info('Merging bands...')
-        data = merge(mgr, data)
-        shutil.move(data.band('merged'), args.output)
+        if args.pansharpen:
+            # TODO
+            pass
+        else:
+            LOGGER.info('Merging bands...')
+            data = merge(mgr, data)
+            shutil.move(data.band('merged'), args.output)
 
 
 if __name__ == '__main__':
