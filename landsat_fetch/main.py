@@ -2,40 +2,23 @@
 import argparse
 import pandas as pd
 import multiprocessing
-import urllib.request
 import os
-import json
-import tempfile
 import math
 import numpy as np
-from collections import defaultdict
 from osgeo import gdal
+from collections import defaultdict
+
+from .filemanager import tempfilemanager
+from .common import LANDSAT_8_URL, LOGGER
+from .scenes import scenelist
+from .product import product_set, product
 
 gdal.AllRegister()
 
-_base_url = "http://landsat-pds.s3.amazonaws.com/c1/L8/"
-
-def overlaps_1d(line0, line1):
-    l0x0, l0x1 = line0
-    l1x0, l1x1 = line1
-    return (l0x1 >= l1x0) & (l1x1 >= l0x0)
-
-def overlaps_2d(box0, box1):
-    b0y0, b0x0, b0y1, b0x1 = box0
-    b1y0, b1x0, b1y1, b1x1 = box1
-    return overlaps_1d((b0x0, b0x1), (b1x0, b1x1)) & overlaps_1d((b0y0, b0y1), (b1y0, b1y1))
-
-def acquire(tup):
-    prod, cat, ident, url = tup
-    print('fetching {}'.format(url))
-    return (prod, cat, ident, urllib.request.urlretrieve(url)[0])
-
 def calibrate(tup):
-    scene, band, orig_file, gain, bias, sun_elevation = tup
-    print('calibrating scene {:s} band {:d}'.format(scene, band))
+    prod, band, orig_file, gain, bias, sun_elevation, new_file = tup
+    LOGGER.info('Calibrating product {:s} band {:d}...'.format(prod, band))
 
-    tmpfh, new_file = tempfile.mkstemp(suffix='.tiff')
-    os.close(tmpfh)
     ds = gdal.Open(orig_file)
     arr = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
     rows, cols = arr.shape
@@ -50,15 +33,11 @@ def calibrate(tup):
     outdata.GetRasterBand(1).WriteArray(arr)
     outdata.FlushCache()
 
-    outdata = None
-    ds = None
-    os.replace(new_file, orig_file)
+    return prod, band, new_file
 
 def mosaic(tup):
-    band, inputs, bbox = tup
-    print('creating mosaic for band {:d}'.format(band))
-    tmpfh, new_file = tempfile.mkstemp(suffix='.tiff')
-    os.close(tmpfh)
+    band, inputs, bbox, new_file = tup
+    LOGGER.info('Creating mosaic for band {:d}...'.format(band))
     gdal.Warp(new_file, inputs, dstSRS='+proj=longlat +ellps=WGS84', srcNodata=0, outputBounds=bbox)
     return new_file
 
@@ -74,101 +53,70 @@ def main():
     parser.add_argument("-f", "--scene_list", type=str, default=None)
     parser.add_argument("-n", "--num_workers", type=int, default=4)
     parser.add_argument('--calibrate', action='store_true', default=False)
+    parser.add_argument('--keepfiles', type=str, default=None)
 
     args = parser.parse_args()
 
     if args.band is None:
         args.band = [4, 3, 2]
 
-    if args.scene_list is None:
-        args.scene_list = _base_url + "scene_list.gz"
-        print('acquiring scene list')
-    else:
-        print('loading scene list')
-
-    sc = pd.read_csv(args.scene_list)
-    sc_bbox = (sc.min_lat, sc.min_lon, sc.max_lat, sc.max_lon)
-    req_bbox = (args.lat1, args.lon0, args.lat0, args.lon1)
-
-    print('selecting matching scenes')
-    sc = sc[overlaps_2d(sc_bbox, req_bbox) & (sc.processingLevel == 'L1TP')]
-    cells_needed = [(r.path, r.row) for r in sc[['path', 'row']].drop_duplicates().itertuples()]
-
-    files_needed = []
-    for path, row in cells_needed:
-        prod = next(sc[(sc.cloudCover < args.max_clouds) & (sc.path==path) & (sc.row==row)].sort_values('acquisitionDate', ascending=False).itertuples())
-        prod_id = prod.productId
-        scene_base_url = _base_url + '{:03d}/{:03d}/{:s}/{:s}_'.format(prod.path, prod.row, prod_id, prod_id)
-
-        for b in args.band:
-            url = scene_base_url + 'B{:d}.TIF'.format(b)
-            files_needed.append((prod_id, 'band', b, url))
-
-        if args.calibrate:
-            url = scene_base_url + 'MTL.json'
-            files_needed.append((prod_id, 'meta', None, url))
-    
-    print('need to acquire {:d} files in {:d} scenes'.format(len(files_needed), len(cells_needed)))
-
     pool = multiprocessing.Pool(args.num_workers)
 
-    fetched_files = pool.map(acquire, files_needed)
-    
-    data = defaultdict(lambda: {})
-    for scene, cat, ident, value in fetched_files:
-        data[scene][(cat, ident)] = value
+    with tempfilemanager(args.keepfiles, args.keepfiles is not None) as mgr:
 
-    if args.calibrate:
-        cal_jobs = []
-        for scene in data:
-            with open(data[scene][('meta', None)], 'r') as fh:
-                meta = json.load(fh)
+        LOGGER.info("Loading scene list...")
+        sc = scenelist.load_or_acquire(args.scene_list)
 
-            sun_elevation = math.radians(meta['L1_METADATA_FILE']['IMAGE_ATTRIBUTES']['SUN_ELEVATION'])
+        LOGGER.info("Filtering scene list on processing level and footprint...")
+        sc = sc.filter(lambda df: df.processingLevel == 'L1TP')
+        sc = sc.filter(lambda df: scenelist.overlaps(df, args.lat1, args.lon0, args.lat0, args.lon1))
 
-            for cat, band in data[scene]:
-                if cat != 'band':
-                    continue
+        LOGGER.info("Selecting matching paths and rows...")
+        cells_needed = sc.paths_and_rows()
 
-                gain = (meta['L1_METADATA_FILE']['RADIOMETRIC_RESCALING']['REFLECTANCE_MULT_BAND_{:d}'.format(band)])
-                bias = (meta['L1_METADATA_FILE']['RADIOMETRIC_RESCALING']['REFLECTANCE_ADD_BAND_{:d}'.format(band)])
+        LOGGER.info("Filtering scene list on cloud cover...")
+        sc = sc.filter(lambda df: df.cloudCover < args.max_clouds)
 
-                cal_jobs.append((scene, band, data[scene][(cat, band)], gain, bias, sun_elevation))
+        data = product_set.acquire(pool, mgr, sc, cells_needed, args.calibrate, args.band)
+
+        if args.calibrate:
+            cal_jobs = []
+            for prod_id, prod in data.products:
+                sun_elevation = math.radians(prod.meta['L1_METADATA_FILE']['IMAGE_ATTRIBUTES']['SUN_ELEVATION'])
+                for band, filename in prod.bands:
+                    gain = prod.meta['L1_METADATA_FILE']['RADIOMETRIC_RESCALING']['REFLECTANCE_MULT_BAND_{:d}'.format(band)]
+                    bias = prod.meta['L1_METADATA_FILE']['RADIOMETRIC_RESCALING']['REFLECTANCE_ADD_BAND_{:d}'.format(band)]
+                    cal_jobs.append((prod_id, band, filename, gain, bias, sun_elevation, mgr.add_file(suffix=".tiff")))
             
-        pool.map(calibrate, cal_jobs)
-                
-    mosaic_jobs = []
-    for b in args.band:
-        mosaic_files = []
-        for scene, files in data.items():
-            for (cat, ident), filename in files.items():
-                if cat == 'band' and ident == b:
-                    mosaic_files.append(filename)
-        mosaic_jobs.append((b, mosaic_files, [args.lon0, args.lat1, args.lon1, args.lat0]))
-    band_mosaics = pool.map(mosaic, mosaic_jobs)
+            calibrated_data = defaultdict(lambda: {})
+            for prod, band, filename in pool.map(calibrate, cal_jobs):
+                calibrated_data[prod][('band', band)] = filename
 
-    for scene in data.values():
-        for f in scene.values():
-            os.unlink(f)
-    
-    print('merging bands')
-    driver = gdal.GetDriverByName("GTiff")
-    datasets = [gdal.Open(f) for f in band_mosaics]
-    
-    outdata = None
-    for i, ds in enumerate(datasets):
-        arr = ds.GetRasterBand(1).ReadAsArray()
-        if outdata is None:
-            rows, cols = arr.shape
-            outdata = driver.Create(args.output, cols, rows, len(datasets), gdal.GDT_Float32)
-            outdata.SetGeoTransform(ds.GetGeoTransform())
-            outdata.SetProjection(ds.GetProjection())
-        outdata.GetRasterBand(i + 1).WriteArray(arr)
-    outdata.FlushCache()
-    outdata = None
+            data = product_set({k: product(data[k].meta, product.get_bands(v)) for k, v in calibrated_data.items()})
 
-    for f in band_mosaics:
-        os.unlink(f)
+        mosaic_jobs = []
+        for b in args.band:
+            mosaic_files = []
+            for _, prod in data.products:
+                mosaic_files.append(prod.band(b))
+            mosaic_jobs.append((b, mosaic_files, [args.lon0, args.lat1, args.lon1, args.lat0], mgr.add_file(suffix=".tiff")))
+        band_mosaics = pool.map(mosaic, mosaic_jobs)
+        
+        LOGGER.info('Merging bands...')
+        driver = gdal.GetDriverByName("GTiff")
+        datasets = [gdal.Open(f) for f in band_mosaics]
+        
+        outdata = None
+        for i, ds in enumerate(datasets):
+            arr = ds.GetRasterBand(1).ReadAsArray()
+            if outdata is None:
+                rows, cols = arr.shape
+                outdata = driver.Create(args.output, cols, rows, len(datasets), gdal.GDT_Float32)
+                outdata.SetGeoTransform(ds.GetGeoTransform())
+                outdata.SetProjection(ds.GetProjection())
+            outdata.GetRasterBand(i + 1).WriteArray(arr)
+        outdata.FlushCache()
+        outdata = None
 
 
 if __name__ == '__main__':
