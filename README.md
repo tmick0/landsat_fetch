@@ -2,6 +2,8 @@
 
 A Python-based utility for automated acquisition and processing of Landsat 8 data
 
+![Pansharpened false color composite of Albuquerque, NM](images/pansharpened_false_color.jpg)
+
 ## Overview
 
 `landsat_fetch` finds the latest Landsat products covering the requested geographic region (specified as a bounding box in latitude-longitude space),
