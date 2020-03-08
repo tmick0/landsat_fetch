@@ -2,6 +2,7 @@
 import tempfile
 import os
 import os.path
+import shutil
 
 __all__ = ['tempfilemanager']
 
@@ -28,7 +29,8 @@ class tempfilemanager (object):
                 except:
                     pass
             if self._rmdir:
-                os.rmdir(self._prefix)
+                # gdal creates its own temp file when pansharpening, so a simple os.rmdir won't cut it
+                shutil.rmtree(self._prefix)
 
     def add_file(self, name=None, suffix=None):
         if name == None:

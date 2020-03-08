@@ -11,6 +11,7 @@ from .product import product_set, product
 from .calibrate import calibrate
 from .mosaic import mosaic
 from .merge import merge
+from .pansharpen import pansharpen
 
 gdal.AllRegister()
 
@@ -63,8 +64,9 @@ def main():
         data = mosaic(pool, mgr, data, all_bands, [args.lon0, args.lat1, args.lon1, args.lat0])
         
         if args.pansharpen:
-            # TODO
-            pass
+            LOGGER.info('Pansharpening...')
+            data = pansharpen(mgr, data, 8, args.band)
+            shutil.move(data.band('pansharpened'), args.output)
         else:
             LOGGER.info('Merging bands...')
             data = merge(mgr, data)
