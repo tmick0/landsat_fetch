@@ -17,4 +17,4 @@ landsat_fetch output.tiff lat0 lon0 lat1 lon1
 
 Optionally, the `--calibrate` option can be added to retrieve the MTL metadata file for each fetched product and use it to convert the output to reflectance.
 
-Currently, GeoTIFF is the only supported output format.
+Currently, GeoTIFF is the only supported output format. Output is created in the equirectangular (WGS84) projection.
