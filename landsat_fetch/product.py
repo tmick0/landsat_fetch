@@ -75,14 +75,19 @@ class product_set (object):
         return (prod, cat, ident, urllib.request.urlretrieve(url, filename)[0])
 
     @classmethod
-    def acquire(cls, pool, mgr, scene_df, scenes, include_metadata, bands):
+    def acquire(cls, pool, mgr, scene_df, scenes, include_metadata, bands, most_recent_only=True):
         files_needed = []
         for path, row in scenes:
-            prod = scene_df.filter(lambda df: (df.path == path) & (df.row == row)).sort('acquisitionDate', ascending=True).first()        
+            if most_recent_only:
+                prod = [scene_df.filter(lambda df: (df.path == path) & (df.row == row)).sort('acquisitionDate', ascending=True).first()]
+            else:
+                prod = scene_df.filter(lambda df: (df.path == path) & (df.row == row)).all()
             for b in bands:
-                files_needed.append((prod.id, 'band', b, prod.band_url(b), mgr.add_file(suffix='.tiff')))
+                for p in prod:
+                    files_needed.append((p.id, 'band', b, p.band_url(b), mgr.add_file(suffix='.tiff')))
             if include_metadata:
-                files_needed.append((prod.id, 'meta', None, prod.metadata_url(), mgr.add_file(suffix='.json')))
+                for p in prod:
+                    files_needed.append((p.id, 'meta', None, p.metadata_url(), mgr.add_file(suffix='.json')))
         
         LOGGER.info('Acquiring {:d} files in {:d} scenes...'.format(len(files_needed), len(scenes)))
         fetched_files = pool.map(cls._acquire_one, files_needed)

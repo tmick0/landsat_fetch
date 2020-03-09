@@ -3,14 +3,14 @@ import numpy as np
 from collections import defaultdict
 from osgeo import gdal
 
-from .product import product_set, product
-from .common import LOGGER
+from ..product import product_set, product
+from ..common import LOGGER
 
 __all__ = ['calibrate']
 
 def calibrate_one(tup):
     prod, band, orig_file, gain, bias, sun_elevation, new_file = tup
-    LOGGER.info('Calibrating product {:s} band {:d}...'.format(prod, band))
+    LOGGER.info('Calibrating product {:s} band {}...'.format(prod, band))
 
     ds = gdal.Open(orig_file)
     arr = ds.GetRasterBand(1).ReadAsArray().astype(np.float32)

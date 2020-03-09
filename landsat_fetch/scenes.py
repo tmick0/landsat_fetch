@@ -24,10 +24,19 @@ class scenelist (object):
     
     def sort(self, *args, **kwargs):
         return self.__class__(self._df.sort_values(*args, **kwargs))
-    
+
+    def remove_duplicates(self):
+        return self.__class__(self._df.drop_duplicates(subset='entityId'))
+
     def first(self):
         return product_index_entry(next(self._df.itertuples()))
     
+    def all(self):
+        return [product_index_entry(t) for t in self._df.itertuples()]
+    
+    def df(self):
+        return self._df
+
     def paths_and_rows(self):
         return [(r.path, r.row) for r in self._df[['path', 'row']].drop_duplicates().itertuples()]
 
