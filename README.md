@@ -37,6 +37,8 @@ Currently, GeoTIFF is the only supported output format. Output is created in the
 
 ## Timelapse
 
+![Timelapse of WRS cell 33/36 over the year 2019](images/timelapse.gif)
+
 ```
 landsat_fetch timelapse
 ```
