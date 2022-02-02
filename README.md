@@ -8,6 +8,17 @@ A Python-based utility for automated acquisition and processing of Landsat 8 dat
 
 `landsat_fetch` implements acquisition of Landsat 8 products and a couple of processing workflows.
 
+## Installation
+
+It is recommended to install in a virtual environment:
+
+```sh
+$ python3 -mvenv --system-site-packages venv
+$ source venv/bin/activate
+$ pip install -U pip setuptools
+$ pip install .
+```
+
 ## Mosaic
 
 ```
